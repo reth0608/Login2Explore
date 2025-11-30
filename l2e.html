@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>EmpData - JPDB Form</title>
+  <!-- Bootstrap CSS (CDN) -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>
+    .spinner-border-sm {
+      width: 1rem;
+      height: 1rem;
+      border-width: .15em;
+    }
+
+    #status {
+      min-height: 1.5rem;
+    }
+
+    /* reserve small space for status text */
+  </style>
+</head>
+
+<body class="bg-light">
+  <div class="container py-5">
+    <div class="card mx-auto" style="max-width:720px">
+      <div class="card-body">
+        <h4 class="card-title mb-3">Employee Form (EmpData)</h4>
+
+        <div id="status" class="mb-3 text-muted"></div>
+
+        <form id="empForm" autocomplete="off" onsubmit="return false;">
+          <div class="row g-2">
+            <div class="col-md-4">
+              <label class="form-label">Employee ID</label>
+              <input id="id" class="form-control" />
+            </div>
+            <div class="col-md-8">
+              <label class="form-label">Employee Name</label>
+              <input id="name" class="form-control" />
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Salary</label>
+              <input id="salary" class="form-control" type="number" step="0.01" />
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">HRA</label>
+              <input id="hra" class="form-control" type="number" step="0.01" />
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">DA</label>
+              <input id="da" class="form-control" type="number" step="0.01" />
+            </div>
+            <div class="col-12">
+              <label class="form-label">Deduction</label>
+              <input id="deduction" class="form-control" type="number" step="0.01" />
+            </div>
+          </div>
+
+          <div class="d-flex gap-2 mt-4">
+            <button id="saveBtn" class="btn btn-success" disabled>Save</button>
+            <button id="changeBtn" class="btn btn-primary" disabled>Change</button>
+            <button id="resetBtn" class="btn btn-secondary" disabled>Reset</button>
+            <div id="loading" class="ms-auto align-self-center" style="display:none;">
+              <div class="spinner-border spinner-border-sm" role="status"></div>
+            </div>
+          </div>
+        </form>
+
+        <hr />
+      </div>
+    </div>
+  </div>
+
+  <!-- Bootstrap JS (for optional components) -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+  <script>
+    // ========== CONFIG - fill these ==========
+    const API_URL = "http://api.login2explore.com:5577/api/idl";
+    const CONNECTION_TOKEN = "90934872|-31949258351675719|90959645";
+    const DB_NAME = "EMP-DB";
+    const RELATION = "EmpData";
+    // =========================================
+
+    const el = id => document.getElementById(id);
+
+    const saveBtn = el("saveBtn");
+    const changeBtn = el("changeBtn");
+    const resetBtn = el("resetBtn");
+    const statusEl = el("status");
+    const loadingEl = el("loading");
+
+    function showStatus(msg = "", type = "muted") {
+      // Minimal, non-alert status. type: 'muted'|'success'
+      statusEl.textContent = msg;
+      statusEl.className = "mb-3 " + (type === "success" ? "text-success" : "text-muted");
+    }
+    function clearStatus() { showStatus("", "muted"); }
+    function showLoading(show) { loadingEl.style.display = show ? "block" : "none"; }
+
+    function setInitialState() {
+      el("id").disabled = false;
+      el("id").value = "";
+      el("id").focus();
+
+      ["name", "salary", "hra", "da", "deduction"].forEach(id => {
+        el(id).disabled = true;
+        el(id).value = "";
+      });
+
+      saveBtn.disabled = true;
+      changeBtn.disabled = true;
+      resetBtn.disabled = true;
+      clearStatus();
+    }
+
+    function enableForNew() {
+      ["name", "salary", "hra", "da", "deduction"].forEach(id => el(id).disabled = false);
+      saveBtn.disabled = false;
+      changeBtn.disabled = true;
+      resetBtn.disabled = false;
+      el("name").focus();
+    }
+
+    function enableForExisting() {
+      el("id").disabled = true;
+      ["name", "salary", "hra", "da", "deduction"].forEach(id => el(id).disabled = false);
+      saveBtn.disabled = true;     // keep save disabled when editing existing
+      changeBtn.disabled = false;
+      resetBtn.disabled = false;
+      el("name").focus();
+    }
+
+    function validateFormBasic() {
+      // very light validation: require ID and name (no warnings)
+      if (!el("id").value.trim()) { el("id").focus(); return false; }
+      if (!el("name").value.trim()) { el("name").focus(); return false; }
+      return true;
+    }
+
+    async function jpdbRequest(cmd, jsonObj) {
+      const reqObj = {
+        token: CONNECTION_TOKEN,
+        dbName: DB_NAME,
+        rel: RELATION,
+        cmd: cmd,
+        jsonStr: JSON.stringify(jsonObj)
+      };
+      showLoading(true);
+      try {
+        const resp = await fetch(API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(reqObj)
+        });
+        const text = await resp.text();
+        try { return JSON.parse(text); } catch (e) { return { raw: text }; }
+      } finally {
+        showLoading(false);
+      }
+    }
+
+    async function checkIdExists(idVal) {
+      clearStatus();
+      try {
+        const response = await jpdbRequest("FIND_RECORD", { id: idVal });
+        if (response && response.status === 200) {
+          const rec = response.data && response.data.length ? response.data[0] : (response.record || null);
+          if (rec) { showStatus("Record loaded.", "success"); return rec; }
+        }
+        // not found (quiet)
+        showStatus("", "muted");
+        return null;
+      } catch (err) {
+        // quiet on errors as requested
+        return null;
+      }
+    }
+
+    async function saveRecord() {
+      if (!validateFormBasic()) return;
+      const payload = {
+        id: el("id").value.trim(),
+        name: el("name").value.trim(),
+        salary: Number(el("salary").value) || 0,
+        hra: Number(el("hra").value) || 0,
+        da: Number(el("da").value) || 0,
+        deduction: Number(el("deduction").value) || 0
+      };
+      const resp = await jpdbRequest("PUT", payload);
+      if (resp && resp.status === 200) {
+        showStatus("Saved.", "success");
+        setTimeout(() => setInitialState(), 700);
+      } else {
+        // keep it minimal — log to console for debugging
+        console.log("Save response:", resp);
+      }
+    }
+
+    async function updateRecord() {
+      if (!validateFormBasic()) return;
+      const payload = {
+        id: el("id").value.trim(),
+        name: el("name").value.trim(),
+        salary: Number(el("salary").value) || 0,
+        hra: Number(el("hra").value) || 0,
+        da: Number(el("da").value) || 0,
+        deduction: Number(el("deduction").value) || 0
+      };
+      const resp = await jpdbRequest("UPDATE", payload);
+      if (resp && resp.status === 200) {
+        showStatus("Updated.", "success");
+        setTimeout(() => setInitialState(), 700);
+      } else {
+        console.log("Update response:", resp);
+      }
+    }
+
+    function populateForm(rec) {
+      el("id").value = rec.id ?? rec.ID ?? rec._id ?? el("id").value;
+      el("name").value = rec.name ?? rec.Name ?? "";
+      el("salary").value = rec.salary ?? rec.Salary ?? "";
+      el("hra").value = rec.hra ?? rec.HRA ?? "";
+      el("da").value = rec.da ?? rec.DA ?? "";
+      el("deduction").value = rec.deduction ?? rec.Deduction ?? "";
+    }
+
+    // When user types into any non-ID field -> enable Save & Reset (simple behaviour)
+    function wireFieldEntryEnabler() {
+      const fields = ["name", "salary", "hra", "da", "deduction"];
+      fields.forEach(id => {
+        el(id).addEventListener("input", () => {
+          // If the record is existing (id disabled) we should enable change instead.
+          if (el("id").disabled) {
+            changeBtn.disabled = false;
+          } else {
+            saveBtn.disabled = false;
+          }
+          resetBtn.disabled = false;
+          clearStatus();
+        });
+      });
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      setInitialState();
+      wireFieldEntryEnabler();
+
+      el("id").addEventListener("keydown", async (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const idVal = el("id").value.trim();
+          if (!idVal) return;
+          const rec = await checkIdExists(idVal);
+          if (rec) { populateForm(rec); enableForExisting(); }
+          else { enableForNew(); }
+        }
+      });
+
+      el("id").addEventListener("blur", async () => {
+        const idVal = el("id").value.trim();
+        if (!idVal) return;
+        const rec = await checkIdExists(idVal);
+        if (rec) { populateForm(rec); enableForExisting(); }
+        else { enableForNew(); }
+      });
+
+      saveBtn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        await saveRecord();
+      });
+
+      changeBtn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        await updateRecord();
+      });
+
+      resetBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        setInitialState();
+      });
+
+      // clear status on manual input
+      document.querySelectorAll("input").forEach(i => i.addEventListener("input", () => clearStatus()));
+    });
+  </script>
+</body>
+
+</html>
